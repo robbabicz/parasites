@@ -47,11 +47,26 @@ struct Parameters {
   bool freeze;
   bool trigger;
   bool gate;
+
+  // BABICZ MEMORY repeat contour. AGE is exactly transparent at zero.
+  // DARK and THIN are applied inside Clouds' regenerative path so the
+  // spectral loss compounds with each generation in FREE GRAIN.
+  float repeat_loss_age;
+  float repeat_loss_mode;
   
   struct Granular {
     float overlap;
     float window_shape;
     float stereo_spread;
+    // BABICZ extensions. Values 0..4 select the five musical position fields;
+    // a negative value preserves Clouds' fixed play-head placement for engine
+    // modes which do not expose RANDOM FIELD. Coherence morphs independent
+    // draws toward a low-discrepancy constellation. At higher values, short
+    // groups share a slowly gliding drift while each grain retains its own
+    // distributed read position.
+    float random_field;
+    float coherence;
+    float field_motion;
     bool use_deterministic_seed;
     bool reverse;
   } granular;

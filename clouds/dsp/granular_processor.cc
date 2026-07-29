@@ -53,6 +53,21 @@ void GranularProcessor::Init(
   num_channels_ = 2;
   low_fidelity_ = false;
   bypass_ = false;
+  silence_ = false;
+  freeze_lp_ = 0.0f;
+  repeat_loss_mode_lp_ = 0.0f;
+  parameters_ = Parameters {};
+  parameters_.granular.random_field = -1.0f;
+  fill(&in_[0], &in_[kMaxBlockSize], FloatFrame {});
+  fill(&in_downsampled_[0],
+       &in_downsampled_[kMaxBlockSize / kDownsamplingFactor],
+       FloatFrame {});
+  fill(&out_downsampled_[0],
+       &out_downsampled_[kMaxBlockSize / kDownsamplingFactor],
+       FloatFrame {});
+  fill(&out_[0], &out_[kMaxBlockSize], FloatFrame {});
+  fill(&fb_[0], &fb_[kMaxBlockSize], FloatFrame {});
+  fill_n(&tail_buffer_[0][0], 2 * 256, 0);
   
   src_down_.Init();
   src_up_.Init();
@@ -67,6 +82,8 @@ void GranularProcessor::Init(
 void GranularProcessor::ResetFilters() {
   for (int32_t i = 0; i < 2; ++i) {
     fb_filter_[i].Init();
+    fb_loss_lp_filter_[i].Init();
+    fb_loss_hp_filter_[i].Init();
     lp_filter_[i].Init();
     hp_filter_[i].Init();
   }
@@ -313,17 +330,68 @@ void GranularProcessor::Process(
   }
   
   // Apply feedback, with high-pass filtering to prevent build-ups at very
-  // low frequencies (causing large DC swings).
+  // low frequencies (causing large DC swings). Highly coherent grain fields
+  // receive a small additional safety margin: this is deliberately gentle
+  // and only moves the corner meaningfully when both ORDER and feedback are
+  // high, so normal bass weight remains intact.
   float feedback = parameters_.feedback;
 
   if (playback_mode_ != PLAYBACK_MODE_OLIVERB &&
       playback_mode_ != PLAYBACK_MODE_RESONESTOR) {
     ONE_POLE(freeze_lp_, parameters_.freeze ? 1.0f : 0.0f, 0.0005f)
-    float cutoff = (20.0f + 100.0f * feedback * feedback) / sample_rate();
+    const float coherence = parameters_.granular.random_field >= 0.0f
+        ? fminf(1.0f, fmaxf(0.0f, parameters_.granular.coherence))
+        : 0.0f;
+    const float coherence_curve =
+        coherence * coherence * (3.0f - 2.0f * coherence);
+    const float coherence_safety =
+        55.0f * coherence_curve * coherence_curve * feedback;
+    float cutoff = (
+        20.0f + 100.0f * feedback * feedback + coherence_safety)
+        / sample_rate();
     fb_filter_[0].set_f_q<FREQUENCY_FAST>(cutoff, 0.75f);
     fb_filter_[1].set(fb_filter_[0]);
     fb_filter_[0].Process<FILTER_MODE_HIGH_PASS>(&fb_[0].l, &fb_[0].l, size, 2);
     fb_filter_[1].Process<FILTER_MODE_HIGH_PASS>(&fb_[0].r, &fb_[0].r, size, 2);
+    const float repeat_loss_age = fminf(
+        1.0f, fmaxf(0.0f, parameters_.repeat_loss_age));
+    ONE_POLE(
+        repeat_loss_mode_lp_,
+        fminf(1.0f, fmaxf(0.0f, parameters_.repeat_loss_mode)),
+        0.04f)
+    if (repeat_loss_age > 0.0001f && feedback > 0.0001f) {
+      const float dark_cutoff = fminf(
+          sample_rate() * 0.45f,
+          19500.0f + (1800.0f - 19500.0f) * repeat_loss_age);
+      const float thin_cutoff =
+          20.0f + (850.0f - 20.0f) * repeat_loss_age;
+      fb_loss_lp_filter_[0].set_f_q<FREQUENCY_FAST>(
+          dark_cutoff / sample_rate(), 0.707f);
+      fb_loss_lp_filter_[1].set(fb_loss_lp_filter_[0]);
+      fb_loss_hp_filter_[0].set_f_q<FREQUENCY_FAST>(
+          thin_cutoff / sample_rate(), 0.707f);
+      fb_loss_hp_filter_[1].set(fb_loss_hp_filter_[0]);
+      copy(&fb_[0], &fb_[size], &fb_loss_dark_[0]);
+      copy(&fb_[0], &fb_[size], &fb_loss_thin_[0]);
+      fb_loss_lp_filter_[0].Process<FILTER_MODE_LOW_PASS>(
+          &fb_loss_dark_[0].l, &fb_loss_dark_[0].l, size, 2);
+      fb_loss_lp_filter_[1].Process<FILTER_MODE_LOW_PASS>(
+          &fb_loss_dark_[0].r, &fb_loss_dark_[0].r, size, 2);
+      fb_loss_hp_filter_[0].Process<FILTER_MODE_HIGH_PASS>(
+          &fb_loss_thin_[0].l, &fb_loss_thin_[0].l, size, 2);
+      fb_loss_hp_filter_[1].Process<FILTER_MODE_HIGH_PASS>(
+          &fb_loss_thin_[0].r, &fb_loss_thin_[0].r, size, 2);
+      for (size_t i = 0; i < size; ++i) {
+        const float dark_l = fb_loss_dark_[i].l;
+        const float dark_r = fb_loss_dark_[i].r;
+        const float selected_l =
+            dark_l + (fb_loss_thin_[i].l - dark_l) * repeat_loss_mode_lp_;
+        const float selected_r =
+            dark_r + (fb_loss_thin_[i].r - dark_r) * repeat_loss_mode_lp_;
+        fb_[i].l += (selected_l - fb_[i].l) * repeat_loss_age;
+        fb_[i].r += (selected_r - fb_[i].r) * repeat_loss_age;
+      }
+    }
     float fb_gain = feedback * (2.0f - feedback) * (1.0f - freeze_lp_);
     for (size_t i = 0; i < size; ++i) {
       in_[i].l += fb_gain * (
@@ -606,9 +674,7 @@ void GranularProcessor::Prepare() {
               tail_buffer_[i]);
         }
       }
-      int32_t num_grains = (num_channels_ == 1 ? 32 : 26) * \
-          (low_fidelity_ ? 20 : 16) >> 4;
-      player_.Init(num_channels_, num_grains);
+      player_.Init(num_channels_, kMaxNumGrains);
       ws_player_.Init(&correlator_, num_channels_);
       looper_.Init(num_channels_);
     }

@@ -177,6 +177,7 @@ class GranularProcessor {
   bool bypass_;
   bool reset_buffers_;
   float freeze_lp_;
+  float repeat_loss_mode_lp_;
   float dry_wet_;
   
   void* buffer_[2];
@@ -195,6 +196,8 @@ class GranularProcessor {
   Resonestor resonestor_;
   PitchShifter pitch_shifter_;
   stmlib::Svf fb_filter_[2];
+  stmlib::Svf fb_loss_lp_filter_[2];
+  stmlib::Svf fb_loss_hp_filter_[2];
   stmlib::Svf hp_filter_[2];
   stmlib::Svf lp_filter_[2];
   
@@ -206,6 +209,8 @@ class GranularProcessor {
   FloatFrame out_downsampled_[kMaxBlockSize / kDownsamplingFactor];
   FloatFrame out_[kMaxBlockSize];
   FloatFrame fb_[kMaxBlockSize];
+  FloatFrame fb_loss_dark_[kMaxBlockSize];
+  FloatFrame fb_loss_thin_[kMaxBlockSize];
   
   int16_t tail_buffer_[2][256];
   
