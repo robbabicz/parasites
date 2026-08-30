@@ -158,10 +158,12 @@ class SpectralPrism {
     }
 
     // ShyFFT stores real bins in [0, N/2) and imaginary bins in [N/2, N).
-    // DC stays centred. The remaining 127 audible bins become a true linked
-    // stereo spectrum rather than three broad time-domain filter zones.
-    inverseSpectrum_[0][0] = inverseSpectrum_[1][0]
-        = 0.5f * (fftSpectrum_[0][0] + fftSpectrum_[1][0]);
+    // Keep the incoming stereo side intact.  PRISM adds a stable,
+    // frequency-dependent aperture to the mid signal; it must never first
+    // collapse the granular field to mono, otherwise the per-grain WIDTH and
+    // micro-detune image disappear as soon as PRISM is raised.
+    inverseSpectrum_[0][0] = fftSpectrum_[0][0];
+    inverseSpectrum_[1][0] = fftSpectrum_[1][0];
     inverseSpectrum_[0][kNumBands] = 0.0f;
     inverseSpectrum_[1][kNumBands] = 0.0f;
     for (size_t band = 1; band < kNumBands; ++band) {
@@ -171,6 +173,8 @@ class SpectralPrism {
       const float rightImag = fftSpectrum_[1][band + kNumBands];
       const float midReal = 0.5f * (leftReal + rightReal);
       const float midImag = 0.5f * (leftImag + rightImag);
+      const float sideReal = 0.5f * (leftReal - rightReal);
+      const float sideImag = 0.5f * (leftImag - rightImag);
 
       const float pan = 0.92f * bandPan_[band];
       const float gainLeft = std::sqrt(std::max(0.0f, 1.0f - pan));
@@ -182,13 +186,13 @@ class SpectralPrism {
       const float sine = std::sin(phase);
 
       inverseSpectrum_[0][band]
-          = (midReal * cosine + midImag * sine) * gainLeft;
+          = (midReal * cosine + midImag * sine) * gainLeft + sideReal;
       inverseSpectrum_[0][band + kNumBands]
-          = (midImag * cosine - midReal * sine) * gainLeft;
+          = (midImag * cosine - midReal * sine) * gainLeft + sideImag;
       inverseSpectrum_[1][band]
-          = (midReal * cosine - midImag * sine) * gainRight;
+          = (midReal * cosine - midImag * sine) * gainRight - sideReal;
       inverseSpectrum_[1][band + kNumBands]
-          = (midImag * cosine + midReal * sine) * gainRight;
+          = (midImag * cosine + midReal * sine) * gainRight - sideImag;
     }
 
     constexpr float inverseScale = 1.0f
