@@ -135,6 +135,12 @@ class GranularProcessor {
         ? player_.active_grains()
         : 0.0f;
   }
+
+  inline size_t GetVisualGrains(
+      GrainVisualState* destination, size_t capacity) const {
+    return playback_mode_ == PLAYBACK_MODE_GRANULAR
+        ? player_.GetVisualGrains(destination, capacity) : 0;
+  }
   
   inline void set_quality(int32_t quality) {
     set_num_channels(quality & 1 ? 1 : 2);

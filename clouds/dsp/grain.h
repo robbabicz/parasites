@@ -48,6 +48,15 @@ enum GrainQuality {
   GRAIN_QUALITY_HIGH
 };
 
+// Read-only telemetry for a visualiser.  These values mirror the grain that
+// is actually sounding; they never participate in synthesis or scheduling.
+struct GrainVisualState {
+  float buffer_position;
+  float envelope_phase;
+  float pan;
+  float pitch;
+};
+
 class Grain {
  public:
   Grain() { }
@@ -67,6 +76,9 @@ class Grain {
   void Init() {
     active_ = false;
     envelope_phase_ = 2.0f;
+    buffer_size_ = 1;
+    visual_pan_ = 0.5f;
+    visual_pitch_ = 0.0f;
   }
 
   void Start(
@@ -79,6 +91,8 @@ class Grain {
       float window_shape,
       float gain_l,
       float gain_r,
+      float visual_pan,
+      float visual_pitch,
       GrainQuality recommended_quality) {
     pre_delay_ = pre_delay;
     reverse_ = reverse;
@@ -103,6 +117,9 @@ class Grain {
     active_ = true;
     gain_l_ = gain_l;
     gain_r_ = gain_r;
+    buffer_size_ = buffer_size;
+    visual_pan_ = visual_pan;
+    visual_pitch_ = visual_pitch;
     recommended_quality_ = recommended_quality;
   }
   
@@ -192,7 +209,24 @@ class Grain {
     phase_ = phase;
   }
   
-  inline bool active() { return active_; }
+  inline bool active() const { return active_; }
+
+  inline GrainVisualState visual_state() const {
+    int32_t sample = first_sample_ + (phase_ >> 16);
+    if (buffer_size_ > 0) {
+      sample %= buffer_size_;
+      if (sample < 0) sample += buffer_size_;
+    }
+    GrainVisualState result;
+    result.buffer_position = buffer_size_ > 0
+        ? static_cast<float>(sample) / static_cast<float>(buffer_size_)
+        : 0.0f;
+    result.envelope_phase = std::max(
+        0.0f, std::min(1.0f, envelope_phase_ * 0.5f));
+    result.pan = visual_pan_;
+    result.pitch = visual_pitch_;
+    return result;
+  }
   
   inline GrainQuality recommended_quality() const {
     return recommended_quality_;
@@ -200,6 +234,7 @@ class Grain {
 
  private:
   int32_t first_sample_;
+  int32_t buffer_size_;
   int32_t phase_;
   int32_t phase_increment_;
   int32_t pre_delay_;
@@ -211,6 +246,8 @@ class Grain {
 
   float gain_l_;
   float gain_r_;
+  float visual_pan_;
+  float visual_pitch_;
 
   bool active_;
   bool reverse_;

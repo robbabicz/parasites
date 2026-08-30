@@ -68,6 +68,16 @@ class GranularSamplePlayer {
   inline float active_grains() const {
     return num_grains_;
   }
+
+  inline size_t GetVisualGrains(
+      GrainVisualState* destination, size_t capacity) const {
+    size_t count = 0;
+    for (int32_t i = 0; i < max_num_grains_ && count < capacity; ++i) {
+      if (!grains_[i].active()) continue;
+      destination[count++] = grains_[i].visual_state();
+    }
+    return count;
+  }
   
   void Init(int32_t num_channels, int32_t max_num_grains) {
     max_num_grains_ = max_num_grains;
@@ -282,6 +292,8 @@ class GranularSamplePlayer {
         window_shape,
         gain_l,
         gain_r,
+        pan,
+        pitch,
         quality);
     grain_size_hint_ = grain_size;
   }
