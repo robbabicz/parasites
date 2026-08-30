@@ -138,8 +138,16 @@ class GranularProcessor {
 
   inline size_t GetVisualGrains(
       GrainVisualState* destination, size_t capacity) const {
-    return playback_mode_ == PLAYBACK_MODE_GRANULAR
-        ? player_.GetVisualGrains(destination, capacity) : 0;
+    if (playback_mode_ != PLAYBACK_MODE_GRANULAR) return 0;
+    const size_t count = player_.GetVisualGrains(destination, capacity);
+    // HOLD runs the grain readers unpitched and applies one pitch stage after
+    // the feedback tap. Keep the visual telemetry musical and truthful.
+    if (!parameters_.granular.pitch_feedback_stack) {
+      for (size_t i = 0; i < count; ++i) {
+        destination[i].pitch += parameters_.pitch;
+      }
+    }
+    return count;
   }
   
   inline void set_quality(int32_t quality) {
@@ -189,6 +197,7 @@ class GranularProcessor {
   bool silence_;
   bool bypass_;
   bool reset_buffers_;
+  bool previous_pitch_feedback_stack_;
   float freeze_lp_;
   float repeat_loss_mode_lp_;
   float dry_wet_;

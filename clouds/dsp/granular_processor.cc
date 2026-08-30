@@ -54,11 +54,13 @@ void GranularProcessor::Init(
   low_fidelity_ = false;
   bypass_ = false;
   silence_ = false;
+  previous_pitch_feedback_stack_ = true;
   freeze_lp_ = 0.0f;
   repeat_loss_mode_lp_ = 0.0f;
   parameters_ = Parameters {};
   parameters_.granular.random_field = -1.0f;
   parameters_.granular.minimum_spacing_samples = 0.0f;
+  parameters_.granular.pitch_feedback_stack = true;
   fill(&in_[0], &in_[kMaxBlockSize], FloatFrame {});
   fill(&in_downsampled_[0],
        &in_downsampled_[kMaxBlockSize / kDownsamplingFactor],
@@ -403,6 +405,25 @@ void GranularProcessor::Process(
     }
   }
   
+  // HOLD moves the pitch stage after the regenerative tap. The grain engine
+  // therefore records and regenerates at unity pitch, while the listener
+  // still hears the requested interval. STACK preserves the classic Clouds
+  // topology where each feedback generation is pitched again.
+  if (parameters_.granular.pitch_feedback_stack !=
+      previous_pitch_feedback_stack_) {
+    // The post-tap shifter owns a short internal delay line. Clear only that
+    // workspace when the option changes so old pitched fragments cannot leak
+    // into the newly selected topology; the musical grain memory is retained.
+    pitch_shifter_.Clear();
+    previous_pitch_feedback_stack_ =
+        parameters_.granular.pitch_feedback_stack;
+  }
+  const bool hold_pitch_after_feedback =
+      playback_mode_ == PLAYBACK_MODE_GRANULAR &&
+      !parameters_.granular.pitch_feedback_stack;
+  const float requested_grain_pitch = parameters_.pitch;
+  if (hold_pitch_after_feedback) parameters_.pitch = 0.0f;
+
   if (low_fidelity_) {
     size_t downsampled_size = size / kDownsamplingFactor;
     src_down_.Process(in_, in_downsampled_,size);
@@ -411,6 +432,7 @@ void GranularProcessor::Process(
   } else {
     ProcessGranular(in_, out_, size);
   }
+  if (hold_pitch_after_feedback) parameters_.pitch = requested_grain_pitch;
   
   // Diffusion and pitch-shifting post-processings.
   if (playback_mode_ != PLAYBACK_MODE_SPECTRAL &&
@@ -479,6 +501,13 @@ void GranularProcessor::Process(
   
   // This is what is fed back. Reverb is not fed back.
   copy(&out_[0], &out_[size], &fb_[0]);
+
+  if (hold_pitch_after_feedback && fabsf(requested_grain_pitch) > 0.001f) {
+    pitch_shifter_.set_ratio(SemitonesToRatio(requested_grain_pitch));
+    pitch_shifter_.set_size(parameters_.size);
+    pitch_shifter_.set_dry_wet(1.0f);
+    pitch_shifter_.Process(out_, size);
+  }
 
   const float post_gain = 1.2f;
 

@@ -80,6 +80,11 @@ struct Parameters {
     // exactly. Toward one, the linked 256-point STFT disperses 128 spectral
     // bands before the result enters the granular feedback memory.
     float spectral_prism;
+    // Selects where the pitch stage sits relative to the regenerative grain
+    // memory. false = HOLD (feedback is captured before pitch, so each repeat
+    // keeps the chosen interval); true = STACK (pitched output is fed back,
+    // so the interval accumulates on every generation).
+    bool pitch_feedback_stack;
     bool use_deterministic_seed;
     bool reverse;
   } granular;
