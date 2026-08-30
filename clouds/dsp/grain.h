@@ -119,10 +119,10 @@ class Grain {
       if (gain > 1.0f) gain = 1.0f;
       // Even the most percussive SHAPE keeps a short click guard at both
       // edges.  The original asymmetric windows can otherwise terminate a
-      // very short isolated grain with an audible step.  Thirty-two samples
-      // at the fixed 32 kHz engine rate is only 1 ms and leaves the musical
-      // body of every window untouched.
-      const float guard_width = std::min(1.0f, increment * 32.0f);
+      // very short isolated grain with an audible step. Eight samples at the
+      // fixed 32 kHz engine rate only catch a skipped endpoint; the previous
+      // 32-sample guard audibly thinned short clouds and made them crumbly.
+      const float guard_width = std::min(1.0f, increment * 8.0f);
       const float edge = std::min(phase, 2.0f - phase);
       float guard = guard_width > 0.0f
           ? std::max(0.0f, std::min(1.0f, edge / guard_width))
