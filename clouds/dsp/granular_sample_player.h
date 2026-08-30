@@ -64,6 +64,10 @@ class GranularSamplePlayer {
  public:
   GranularSamplePlayer() { }
   ~GranularSamplePlayer() { }
+
+  inline float active_grains() const {
+    return num_grains_;
+  }
   
   void Init(int32_t num_channels, int32_t max_num_grains) {
     max_num_grains_ = max_num_grains;
@@ -99,8 +103,12 @@ class GranularSamplePlayer {
     float overlap = parameters.granular.overlap;
     overlap = (overlap * overlap) * (overlap * overlap);
     float target_num_grains = max_num_grains_ * overlap;
-    float p = target_num_grains / static_cast<float>(grain_size_hint_);
-    float space_between_grains = grain_size_hint_ / target_num_grains;
+    const float natural_space = grain_size_hint_ / target_num_grains;
+    const float minimum_space = std::max(
+        0.0f, parameters.granular.minimum_spacing_samples);
+    const float space_between_grains = std::max(
+        natural_space, minimum_space);
+    float p = 1.0f / space_between_grains;
     if (parameters.granular.use_deterministic_seed) {
       p = -1.0f;
     } else {
@@ -215,11 +223,21 @@ class GranularSamplePlayer {
       position = RandomFieldPosition(parameters, random_field);
     }
     float pitch = parameters.pitch;
+    // Two uniform draws create a centre-weighted triangular distribution:
+    // most grains stay close to the played pitch while a few define the outer
+    // edge selected by MICRO SPREAD. The result is frozen into this grain's
+    // phase increment below, preventing artificial real-time glissandi.
+    const float micro_pitch_cents =
+        (NextRandomFloat() + NextRandomFloat() - 1.0f)
+        * std::max(0.0f, std::min(50.0f,
+            parameters.granular.micro_pitch_spread));
+    pitch += micro_pitch_cents * 0.01f;
     float window_shape = parameters.granular.window_shape;
     float grain_size = GrainSizeSamples(parameters.size);
     float pitch_ratio = SemitonesToRatio(pitch);
     float inv_pitch_ratio = SemitonesToRatio(-pitch);
-    float pan = 0.5f + parameters.stereo_spread * (NextRandomFloat() - 0.5f);
+    float pan = 0.5f
+        + parameters.stereo_spread * (NextRandomFloat() - 0.5f);
     float gain_l, gain_r;
     if (num_channels_ == 1) {
       gain_l = Interpolate(lut_sin, pan, 256.0f);

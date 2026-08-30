@@ -117,6 +117,18 @@ class Grain {
         phase * slope / bias :
         (2.0f - phase) * slope / (2.0f - bias);
       if (gain > 1.0f) gain = 1.0f;
+      // Even the most percussive SHAPE keeps a short click guard at both
+      // edges.  The original asymmetric windows can otherwise terminate a
+      // very short isolated grain with an audible step.  Thirty-two samples
+      // at the fixed 32 kHz engine rate is only 1 ms and leaves the musical
+      // body of every window untouched.
+      const float guard_width = std::min(1.0f, increment * 32.0f);
+      const float edge = std::min(phase, 2.0f - phase);
+      float guard = guard_width > 0.0f
+          ? std::max(0.0f, std::min(1.0f, edge / guard_width))
+          : 1.0f;
+      guard = guard * guard * (3.0f - 2.0f * guard);
+      gain *= guard;
       phase += increment;
       if (phase >= 2.0f) {
         *destination = -1.0f;
@@ -163,13 +175,15 @@ class Grain {
       }
 
       float l = buffer[0].template Read<InterpolationMethod(quality)>(
-          sample_index, phase & 65535) * gain;
+          sample_index, phase & 65535);
+      l *= gain;
       if (num_channels == 1) {
         *destination++ += l * gain_l;
         *destination++ += l * gain_r;
       } else if (num_channels == 2) {
         float r = buffer[1].template Read<InterpolationMethod(quality)>(
-            sample_index, phase & 65535) * gain;
+            sample_index, phase & 65535);
+        r *= gain;
         *destination++ += l * gain_l + r * (1.0f - gain_r);
         *destination++ += r * gain_r + l * (1.0f - gain_l);
       }

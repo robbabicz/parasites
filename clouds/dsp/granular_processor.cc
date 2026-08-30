@@ -58,6 +58,7 @@ void GranularProcessor::Init(
   repeat_loss_mode_lp_ = 0.0f;
   parameters_ = Parameters {};
   parameters_.granular.random_field = -1.0f;
+  parameters_.granular.minimum_spacing_samples = 0.0f;
   fill(&in_[0], &in_[kMaxBlockSize], FloatFrame {});
   fill(&in_downsampled_[0],
        &in_downsampled_[kMaxBlockSize / kDownsamplingFactor],
@@ -71,6 +72,7 @@ void GranularProcessor::Init(
   
   src_down_.Init();
   src_up_.Init();
+  spectral_prism_.Init();
   
   ResetFilters();
   
@@ -345,7 +347,7 @@ void GranularProcessor::Process(
     const float coherence_curve =
         coherence * coherence * (3.0f - 2.0f * coherence);
     const float coherence_safety =
-        55.0f * coherence_curve * coherence_curve * feedback;
+        72.0f * coherence_curve * coherence_curve * feedback;
     float cutoff = (
         20.0f + 100.0f * feedback * feedback + coherence_safety)
         / sample_rate();
@@ -465,6 +467,14 @@ void GranularProcessor::Process(
     hp_filter_[1].set(hp_filter_[0]);
     hp_filter_[1].Process<FILTER_MODE_HIGH_PASS>(
         &out_[0].r, &out_[0].r, size, 2);
+  }
+
+  // BODY / PRISM is a true 128-band linked-stereo transform of the granular
+  // return. It sits before fb_ is captured below, so spectral colour and
+  // spatial dispersion regenerate naturally when FEEDBACK is raised.
+  if (playback_mode_ == PLAYBACK_MODE_GRANULAR) {
+    spectral_prism_.Process(
+        out_, size, parameters_.granular.spectral_prism);
   }
   
   // This is what is fed back. Reverb is not fed back.
@@ -609,6 +619,7 @@ void GranularProcessor::Prepare() {
   }
 
   if (reset_buffers_ || (playback_mode_changed && !benign_change)) {
+    spectral_prism_.Reset();
     void* buffer[2];
     size_t buffer_size[2];
     void* workspace;

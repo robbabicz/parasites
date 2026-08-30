@@ -43,6 +43,7 @@
 #include "clouds/dsp/granular_sample_player.h"
 #include "clouds/dsp/looping_sample_player.h"
 #include "clouds/dsp/pvoc/phase_vocoder.h"
+#include "clouds/dsp/spectral_prism.h"
 #include "clouds/dsp/sample_rate_converter.h"
 #include "clouds/dsp/wsola_sample_player.h"
 
@@ -128,6 +129,12 @@ class GranularProcessor {
   }
   
   inline PlaybackMode playback_mode() const { return playback_mode_; }
+
+  inline float active_grains() const {
+    return playback_mode_ == PLAYBACK_MODE_GRANULAR
+        ? player_.active_grains()
+        : 0.0f;
+  }
   
   inline void set_quality(int32_t quality) {
     set_num_channels(quality & 1 ? 1 : 2);
@@ -189,6 +196,7 @@ class GranularProcessor {
   WSOLASamplePlayer ws_player_;
   LoopingSamplePlayer looper_;
   PhaseVocoder phase_vocoder_;
+  SpectralPrism spectral_prism_;
   
   Diffuser diffuser_;
   Reverb reverb_;

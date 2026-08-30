@@ -67,6 +67,19 @@ struct Parameters {
     float random_field;
     float coherence;
     float field_motion;
+    // Optional minimum distance between free-running grain births, expressed
+    // at Clouds' fixed 32 kHz engine rate.  Zero preserves the original
+    // density/size-derived scheduler.  SpaceLab uses this to let its large
+    // TIME control spread a free cloud into individually playable grains.
+    float minimum_spacing_samples;
+    // Maximum bipolar pitch offset assigned when a new grain is scheduled,
+    // expressed in cents. The grain captures the value at birth, so moving
+    // the control reshapes the cloud without bending voices already playing.
+    float micro_pitch_spread;
+    // BABICZ BODY / PRISM morph. Zero preserves the original granular path
+    // exactly. Toward one, the linked 256-point STFT disperses 128 spectral
+    // bands before the result enters the granular feedback memory.
+    float spectral_prism;
     bool use_deterministic_seed;
     bool reverse;
   } granular;
