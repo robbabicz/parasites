@@ -3,8 +3,8 @@
 // 128-band linked-stereo spectral disperser for the BABICZ BODY / PRISM
 // control.  A 256-point, four-times-overlapped STFT yields 127 moving audio
 // bands plus DC/Nyquist.  BODY remains the untouched granular stream; PRISM
-// fans the same stream across frequency-dependent stereo positions and short
-// phase delays before it is copied into Clouds' feedback memory.
+// fans the same stream across frequency-dependent, phase-following memories
+// and gently moving stereo positions before Clouds' feedback memory.
 
 #ifndef CLOUDS_DSP_SPECTRAL_PRISM_H_
 #define CLOUDS_DSP_SPECTRAL_PRISM_H_
@@ -16,6 +16,7 @@
 
 #include "clouds/dsp/frame.h"
 #include "stmlib/fft/shy_fft.h"
+#include "../../../../dsp/SpectralPhaseTracker.h"
 
 namespace clouds {
 
@@ -59,6 +60,12 @@ class SpectralPrism {
       const float aperture = 0.62f + 0.38f * std::abs(random);
       bandPan_[band] = direction * aperture * bassRelease
           * (0.58f + 0.42f * std::sqrt(normalized));
+      // This stage runs after the lo-fi upsampler, always at Clouds' 32 kHz.
+      // Low fundamentals stay articulate; upper partials leave a longer veil.
+      const float seconds = 0.012f + 0.40f * std::sqrt(normalized)
+          * (0.65f + 0.35f * std::abs(random));
+      memoryPole_[band] = std::exp(-static_cast<float>(kHopSize)
+          / (32000.0f * seconds));
     }
     Reset();
   }
@@ -70,6 +77,7 @@ class SpectralPrism {
     for (auto& channel : fftSpectrum_) channel.fill(0.0f);
     for (auto& channel : inverseSpectrum_) channel.fill(0.0f);
     for (auto& channel : inverseOutput_) channel.fill(0.0f);
+    ClearMemory();
     inputWrite_ = 0;
     sampleCounter_ = 0;
     amount_ = 0.0f;
@@ -89,6 +97,7 @@ class SpectralPrism {
       amount_ = 0.0f;
       if (!sleeping_) {
         for (auto& channel : outputRing_) channel.fill(0.0f);
+        ClearMemory();  // Never resurrect a hidden tail on the next wake.
         sleeping_ = true;
       }
       for (size_t sample = 0; sample < size; ++sample) {
@@ -145,6 +154,13 @@ class SpectralPrism {
     return value * value * (3.0f - 2.0f * value);
   }
 
+  void ClearMemory() {
+    memoryReal_.fill(0.0f);
+    memoryImag_.fill(0.0f);
+    for (auto& tracker : phaseTracker_) tracker.reset();
+    movementPhase_ = 0.0f;
+  }
+
   void RenderFrame() {
     for (size_t channel = 0; channel < 2; ++channel) {
       for (size_t index = 0; index < kFftSize; ++index) {
@@ -158,8 +174,8 @@ class SpectralPrism {
     }
 
     // ShyFFT stores real bins in [0, N/2) and imaginary bins in [N/2, N).
-    // Keep the incoming stereo side intact.  PRISM adds a stable,
-    // frequency-dependent aperture to the mid signal; it must never first
+    // Keep the incoming stereo side intact. PRISM adds a slowly moving,
+    // frequency-dependent memory/aperture to the mid signal; it must never first
     // collapse the granular field to mono, otherwise the per-grain WIDTH and
     // micro-detune image disappear as soon as PRISM is raised.
     inverseSpectrum_[0][0] = fftSpectrum_[0][0];
@@ -171,12 +187,32 @@ class SpectralPrism {
       const float leftImag = fftSpectrum_[0][band + kNumBands];
       const float rightReal = fftSpectrum_[1][band];
       const float rightImag = fftSpectrum_[1][band + kNumBands];
-      const float midReal = 0.5f * (leftReal + rightReal);
-      const float midImag = 0.5f * (leftImag + rightImag);
+      float midReal = 0.5f * (leftReal + rightReal);
+      float midImag = 0.5f * (leftImag + rightImag);
       const float sideReal = 0.5f * (leftReal - rightReal);
       const float sideImag = 0.5f * (leftImag - rightImag);
 
-      const float pan = 0.92f * bandPan_[band];
+      // Follow measured inter-frame phase, not an arbitrary oscillator pitch.
+      // Once input falls silent, retain its last advance for a tonal release.
+      // Convex complex accumulation bounds each lane by its incoming magnitude;
+      // no magnitude peak-hold or energy multiplier can build an infinite tail.
+      auto& tracker = phaseTracker_[band];
+      tracker.observe(midReal, midImag);
+      const float rotatedReal = memoryReal_[band] * tracker.advanceReal
+          - memoryImag_[band] * tracker.advanceImaginary;
+      const float rotatedImag = memoryReal_[band] * tracker.advanceImaginary
+          + memoryImag_[band] * tracker.advanceReal;
+      const float pole = memoryPole_[band];
+      memoryReal_[band] = (1.0f - pole) * midReal + pole * rotatedReal;
+      memoryImag_[band] = (1.0f - pole) * midImag + pole * rotatedImag;
+      if (std::abs(memoryReal_[band]) + std::abs(memoryImag_[band]) < 1.0e-15f) {
+        memoryReal_[band] = memoryImag_[band] = 0.0f;
+      }
+      // Keep a little fresh light at full PRISM; the majority becomes a veil.
+      midReal = 0.18f * midReal + 0.82f * memoryReal_[band];
+      midImag = 0.18f * midImag + 0.82f * memoryImag_[band];
+      const float drift = std::sin(movementPhase_ + band * 0.37f);
+      const float pan = (0.78f + 0.14f * drift) * bandPan_[band];
       const float gainLeft = std::sqrt(std::max(0.0f, 1.0f - pan));
       const float gainRight = std::sqrt(std::max(0.0f, 1.0f + pan));
       const float normalized = static_cast<float>(band)
@@ -194,6 +230,12 @@ class SpectralPrism {
       inverseSpectrum_[1][band + kNumBands]
           = (midImag * cosine + midReal * sine) * gainRight - sideImag;
     }
+
+    // One calm 8-second cycle with lane offsets, no time-varying read heads
+    // and therefore no imposed vibrato or octave-shimmer transposition.
+    movementPhase_ += 6.283185307179586f * kHopSize / (32000.0f * 8.0f);
+    if (movementPhase_ >= 6.283185307179586f)
+      movementPhase_ -= 6.283185307179586f;
 
     constexpr float inverseScale = 1.0f
         / static_cast<float>(kFftSize * kFftSize / kHopSize / 2u);
@@ -214,6 +256,10 @@ class SpectralPrism {
   FFT fft_;
   std::array<float, kFftSize> window_ {};
   std::array<float, kNumBands> bandPan_ {};
+  std::array<float, kNumBands> memoryPole_ {};
+  std::array<float, kNumBands> memoryReal_ {}, memoryImag_ {};
+  std::array<babicz::dsp::SpectralPhaseTracker, kNumBands> phaseTracker_ {};
+  float movementPhase_ = 0.0f;
   std::array<std::array<float, kFftSize>, 2> inputRing_ {};
   std::array<std::array<float, kOutputRingSize>, 2> outputRing_ {};
   std::array<std::array<float, kFftSize>, 2> fftInput_ {};
